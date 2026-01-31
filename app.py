@@ -16,7 +16,7 @@ st.set_page_config(page_title="Customer Churn Analysis", layout="wide")
 
 # Sidebar Navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Home", "Data Exploration", "Model Training", "Model Evaluation", "Model Comparison"])
+page = st.sidebar.radio("Go to", ["Home", "Data Exploration", "Model Training", "Model Evaluation", "Model Comparison", "Churn Prediction"])
 
 # Load Data
 @st.cache_data
@@ -176,6 +176,7 @@ elif page == "Model Training":
             progress_bar.progress((i + 1) / len(models))
         
         st.session_state['results'] = results
+        st.session_state['trained_models'] = models
         st.success("All models trained successfully!")
 
 # Model Evaluation Page
@@ -251,3 +252,93 @@ elif page == "Model Comparison":
             sns.barplot(x='Model', y='ROC-AUC', data=comparison_df, palette='viridis', ax=ax)
             plt.xticks(rotation=45)
             st.pyplot(fig)
+
+# Churn Prediction Page
+elif page == "Churn Prediction":
+    st.title("🔮 Real-Time Churn Prediction")
+    
+    if 'results' not in st.session_state or 'trained_models' not in st.session_state:
+        st.warning("Please train the models first on the 'Model Training' page.")
+    else:
+        # Identify the best model based on Accuracy
+        results = st.session_state['results']
+        best_model_name = max(results, key=lambda x: results[x]['accuracy'])
+        best_model = st.session_state['trained_models'][best_model_name]
+        
+        st.success(f"Using the best-performing model: **{best_model_name}**")
+        
+        # User Inputs
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.subheader("Demographics")
+            gender = st.selectbox("Gender", df['gender'].unique())
+            SeniorCitizen = st.selectbox("Senior Citizen", [0, 1])
+            Partner = st.selectbox("Partner", df['Partner'].unique())
+            Dependents = st.selectbox("Dependents", df['Dependents'].unique())
+            tenure = st.slider("Tenure (Months)", 0, 72, 12)
+
+        with col2:
+            st.subheader("Services")
+            PhoneService = st.selectbox("Phone Service", df['PhoneService'].unique())
+            MultipleLines = st.selectbox("Multiple Lines", df['MultipleLines'].unique())
+            InternetService = st.selectbox("Internet Service", df['InternetService'].unique())
+            OnlineSecurity = st.selectbox("Online Security", df['OnlineSecurity'].unique())
+            OnlineBackup = st.selectbox("Online Backup", df['OnlineBackup'].unique())
+            DeviceProtection = st.selectbox("Device Protection", df['DeviceProtection'].unique())
+            TechSupport = st.selectbox("Tech Support", df['TechSupport'].unique())
+            StreamingTV = st.selectbox("Streaming TV", df['StreamingTV'].unique())
+            StreamingMovies = st.selectbox("Streaming Movies", df['StreamingMovies'].unique())
+
+        with col3:
+            st.subheader("Account")
+            Contract = st.selectbox("Contract", df['Contract'].unique())
+            PaperlessBilling = st.selectbox("Paperless Billing", df['PaperlessBilling'].unique())
+            PaymentMethod = st.selectbox("Payment Method", df['PaymentMethod'].unique())
+            MonthlyCharges = st.number_input("Monthly Charges", min_value=0.0, value=50.0)
+            TotalCharges = st.number_input("Total Charges", min_value=0.0, value=500.0)
+
+        # Preprocessing Input Data
+        input_data = pd.DataFrame({
+            'gender': [gender], 'SeniorCitizen': [SeniorCitizen], 'Partner': [Partner], 
+            'Dependents': [Dependents], 'tenure': [tenure], 'PhoneService': [PhoneService], 
+            'MultipleLines': [MultipleLines], 'InternetService': [InternetService], 
+            'OnlineSecurity': [OnlineSecurity], 'OnlineBackup': [OnlineBackup], 
+            'DeviceProtection': [DeviceProtection], 'TechSupport': [TechSupport], 
+            'StreamingTV': [StreamingTV], 'StreamingMovies': [StreamingMovies], 
+            'Contract': [Contract], 'PaperlessBilling': [PaperlessBilling], 
+            'PaymentMethod': [PaymentMethod], 'MonthlyCharges': [MonthlyCharges], 
+            'TotalCharges': [TotalCharges]
+        })
+
+        if st.button("🚀 Predict Churn"):
+            # Prepare data for preprocessing (need original data for fitting encoders/scaler)
+            df_ml_temp = df.drop(['customerID', 'Churn'], axis=1).copy()
+            df_ml_temp = pd.concat([df_ml_temp, input_data], axis=0)
+            
+            # Label Encoding
+            le = LabelEncoder()
+            categorical_cols = df_ml_temp.select_dtypes(include=['object']).columns
+            for col in categorical_cols:
+                df_ml_temp[col] = le.fit_transform(df_ml_temp[col])
+            
+            # Scaling
+            scaler = StandardScaler()
+            X_encoded = df_ml_temp.iloc[:-1] # All except the last row
+            input_encoded = df_ml_temp.iloc[-1:] # The last row
+            
+            scaler.fit(X_encoded)
+            input_scaled = scaler.transform(input_encoded)
+            
+            # Prediction
+            prediction = best_model.predict(input_scaled)[0]
+            probability = best_model.predict_proba(input_scaled)[0][1]
+            
+            st.divider()
+            if prediction == 1:
+                st.error(f"### Result: Customer will churn")
+            else:
+                st.success(f"### Result: Customer will not churn")
+                
+            st.write(f"**Churn Probability:** {probability:.2%}")
+            st.progress(probability)
