@@ -27,7 +27,59 @@ def load_data():
     df.dropna(inplace=True)
     return df
 
+@st.cache_resource
+def auto_train_models(_df):
+    # Preprocessing
+    df_ml = _df.drop('customerID', axis=1).copy()
+    
+    # Encoding categorical variables
+    le = LabelEncoder()
+    categorical_cols = df_ml.select_dtypes(include=['object']).columns
+    for col in categorical_cols:
+        df_ml[col] = le.fit_transform(df_ml[col])
+        
+    X = df_ml.drop('Churn', axis=1)
+    y = df_ml['Churn']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    models = {
+        "Logistic Regression": LogisticRegression(),
+        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+        "XGBoost": XGBClassifier(eval_metric='logloss'),
+        "SVM": SVC(probability=True)
+    }
+    
+    results = {}
+    for name, model in models.items():
+        model.fit(X_train_scaled, y_train)
+        y_pred = model.predict(X_test_scaled)
+        y_prob = model.predict_proba(X_test_scaled)[:, 1]
+        
+        results[name] = {
+            "model": model,
+            "accuracy": accuracy_score(y_test, y_pred),
+            "roc_auc": roc_auc_score(y_test, y_prob),
+            "report": classification_report(y_test, y_pred, output_dict=True),
+            "cm": confusion_matrix(y_test, y_pred),
+            "y_prob": y_prob
+        }
+    return scaler, X_train_scaled, X_test_scaled, y_train, y_test, results
+
 df = load_data()
+
+# Auto-initialize ML pipeline
+scaler, X_train_scaled, X_test_scaled, y_train, y_test, results = auto_train_models(df)
+st.session_state['scaler'] = scaler
+st.session_state['X_train'] = X_train_scaled
+st.session_state['X_test'] = X_test_scaled
+st.session_state['y_train'] = y_train
+st.session_state['y_test'] = y_test
+st.session_state['results'] = results
 
 # Home Page
 if page == "Home":
@@ -121,63 +173,10 @@ elif page == "Data Exploration":
 # Model Training Page
 elif page == "Model Training":
     st.title("⚙️ Model Training & Preprocessing")
-    
     st.info("Applying Label Encoding and Standard Scaling to the dataset.")
-    
-    # Preprocessing
-    df_ml = df.drop('customerID', axis=1).copy()
-    
-    # Encoding categorical variables
-    le = LabelEncoder()
-    categorical_cols = df_ml.select_dtypes(include=['object']).columns
-    for col in categorical_cols:
-        df_ml[col] = le.fit_transform(df_ml[col])
-        
-    X = df_ml.drop('Churn', axis=1)
-    y = df_ml['Churn']
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
     st.success("Data successfully preprocessed and split!")
-    
-    # Store data in session state for other pages
-    st.session_state['X_train'] = X_train_scaled
-    st.session_state['X_test'] = X_test_scaled
-    st.session_state['y_train'] = y_train
-    st.session_state['y_test'] = y_test
-    
-    st.subheader("Train Machine Learning Models")
-    if st.button("🚀 Start Training All Models"):
-        models = {
-            "Logistic Regression": LogisticRegression(),
-            "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-            "XGBoost": XGBClassifier(eval_metric='logloss'),
-            "SVM": SVC(probability=True)
-        }
-        
-        results = {}
-        progress_bar = st.progress(0)
-        for i, (name, model) in enumerate(models.items()):
-            model.fit(X_train_scaled, y_train)
-            y_pred = model.predict(X_test_scaled)
-            y_prob = model.predict_proba(X_test_scaled)[:, 1]
-            
-            results[name] = {
-                "accuracy": accuracy_score(y_test, y_pred),
-                "roc_auc": roc_auc_score(y_test, y_prob),
-                "report": classification_report(y_test, y_pred, output_dict=True),
-                "cm": confusion_matrix(y_test, y_pred),
-                "y_prob": y_prob
-            }
-            progress_bar.progress((i + 1) / len(models))
-        
-        st.session_state['results'] = results
-        st.session_state['trained_models'] = models
-        st.success("All models trained successfully!")
+    st.subheader("Machine Learning Models")
+    st.success("All models trained automatically and are ready for evaluation!")
 
 # Model Evaluation Page
 elif page == "Model Evaluation":
@@ -255,90 +254,98 @@ elif page == "Model Comparison":
 
 # Churn Prediction Page
 elif page == "Churn Prediction":
-    st.title("🔮 Real-Time Churn Prediction")
+    st.title("🔮 Customer Churn Prediction")
     
-    if 'results' not in st.session_state or 'trained_models' not in st.session_state:
+    if 'results' not in st.session_state:
         st.warning("Please train the models first on the 'Model Training' page.")
     else:
-        # Identify the best model based on Accuracy
-        results = st.session_state['results']
-        best_model_name = max(results, key=lambda x: results[x]['accuracy'])
-        best_model = st.session_state['trained_models'][best_model_name]
+        st.subheader("Enter Customer Details")
         
-        st.success(f"Using the best-performing model: **{best_model_name}**")
-        
-        # User Inputs
+        # Create input form
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.subheader("Demographics")
             gender = st.selectbox("Gender", df['gender'].unique())
-            SeniorCitizen = st.selectbox("Senior Citizen", [0, 1])
-            Partner = st.selectbox("Partner", df['Partner'].unique())
-            Dependents = st.selectbox("Dependents", df['Dependents'].unique())
-            tenure = st.slider("Tenure (Months)", 0, 72, 12)
-
+            senior = st.selectbox("Senior Citizen", ["No", "Yes"])
+            partner = st.selectbox("Partner", df['Partner'].unique())
+            dependents = st.selectbox("Dependents", df['Dependents'].unique())
+            tenure = st.slider("Tenure (months)", 0, 72, 12)
+            phone = st.selectbox("Phone Service", df['PhoneService'].unique())
+            multiple = st.selectbox("Multiple Lines", df['MultipleLines'].unique())
+            
         with col2:
-            st.subheader("Services")
-            PhoneService = st.selectbox("Phone Service", df['PhoneService'].unique())
-            MultipleLines = st.selectbox("Multiple Lines", df['MultipleLines'].unique())
-            InternetService = st.selectbox("Internet Service", df['InternetService'].unique())
-            OnlineSecurity = st.selectbox("Online Security", df['OnlineSecurity'].unique())
-            OnlineBackup = st.selectbox("Online Backup", df['OnlineBackup'].unique())
-            DeviceProtection = st.selectbox("Device Protection", df['DeviceProtection'].unique())
-            TechSupport = st.selectbox("Tech Support", df['TechSupport'].unique())
-            StreamingTV = st.selectbox("Streaming TV", df['StreamingTV'].unique())
-            StreamingMovies = st.selectbox("Streaming Movies", df['StreamingMovies'].unique())
-
+            internet = st.selectbox("Internet Service", df['InternetService'].unique())
+            security = st.selectbox("Online Security", df['OnlineSecurity'].unique())
+            backup = st.selectbox("Online Backup", df['OnlineBackup'].unique())
+            protection = st.selectbox("Device Protection", df['DeviceProtection'].unique())
+            support = st.selectbox("Tech Support", df['TechSupport'].unique())
+            tv = st.selectbox("Streaming TV", df['StreamingTV'].unique())
+            movies = st.selectbox("Streaming Movies", df['StreamingMovies'].unique())
+            
         with col3:
-            st.subheader("Account")
-            Contract = st.selectbox("Contract", df['Contract'].unique())
-            PaperlessBilling = st.selectbox("Paperless Billing", df['PaperlessBilling'].unique())
-            PaymentMethod = st.selectbox("Payment Method", df['PaymentMethod'].unique())
-            MonthlyCharges = st.number_input("Monthly Charges", min_value=0.0, value=50.0)
-            TotalCharges = st.number_input("Total Charges", min_value=0.0, value=500.0)
-
-        # Preprocessing Input Data
-        input_data = pd.DataFrame({
-            'gender': [gender], 'SeniorCitizen': [SeniorCitizen], 'Partner': [Partner], 
-            'Dependents': [Dependents], 'tenure': [tenure], 'PhoneService': [PhoneService], 
-            'MultipleLines': [MultipleLines], 'InternetService': [InternetService], 
-            'OnlineSecurity': [OnlineSecurity], 'OnlineBackup': [OnlineBackup], 
-            'DeviceProtection': [DeviceProtection], 'TechSupport': [TechSupport], 
-            'StreamingTV': [StreamingTV], 'StreamingMovies': [StreamingMovies], 
-            'Contract': [Contract], 'PaperlessBilling': [PaperlessBilling], 
-            'PaymentMethod': [PaymentMethod], 'MonthlyCharges': [MonthlyCharges], 
-            'TotalCharges': [TotalCharges]
-        })
-
+            contract = st.selectbox("Contract", df['Contract'].unique())
+            paperless = st.selectbox("Paperless Billing", df['PaperlessBilling'].unique())
+            payment = st.selectbox("Payment Method", df['PaymentMethod'].unique())
+            monthly = st.number_input("Monthly Charges", min_value=0.0, value=50.0)
+            total = st.number_input("Total Charges", min_value=0.0, value=500.0)
+            
         if st.button("🚀 Predict Churn"):
-            # Prepare data for preprocessing (need original data for fitting encoders/scaler)
-            df_ml_temp = df.drop(['customerID', 'Churn'], axis=1).copy()
-            df_ml_temp = pd.concat([df_ml_temp, input_data], axis=0)
+            # Prepare input data
+            input_dict = {
+                'gender': gender,
+                'SeniorCitizen': 1 if senior == "Yes" else 0,
+                'Partner': partner,
+                'Dependents': dependents,
+                'tenure': tenure,
+                'PhoneService': phone,
+                'MultipleLines': multiple,
+                'InternetService': internet,
+                'OnlineSecurity': security,
+                'OnlineBackup': backup,
+                'DeviceProtection': protection,
+                'TechSupport': support,
+                'StreamingTV': tv,
+                'StreamingMovies': movies,
+                'Contract': contract,
+                'PaperlessBilling': paperless,
+                'PaymentMethod': payment,
+                'MonthlyCharges': monthly,
+                'TotalCharges': total
+            }
             
-            # Label Encoding
-            le = LabelEncoder()
-            categorical_cols = df_ml_temp.select_dtypes(include=['object']).columns
+            input_df = pd.DataFrame([input_dict])
+            
+            # Replicate Preprocessing (Minimal & Necessary)
+            df_ml = df.drop(['customerID', 'Churn'], axis=1).copy()
+            # Convert TotalCharges to numeric to match training logic
+            df_ml['TotalCharges'] = pd.to_numeric(df_ml['TotalCharges'], errors='coerce')
+            
+            # Fit encoders on original data (since they weren't saved in existing code)
+            categorical_cols = df_ml.select_dtypes(include=['object']).columns
             for col in categorical_cols:
-                df_ml_temp[col] = le.fit_transform(df_ml_temp[col])
+                le = LabelEncoder()
+                le.fit(df_ml[col].astype(str))
+                input_df[col] = le.transform(input_df[col].astype(str))
             
-            # Scaling
-            scaler = StandardScaler()
-            X_encoded = df_ml_temp.iloc[:-1] # All except the last row
-            input_encoded = df_ml_temp.iloc[-1:] # The last row
+            # Scale
+            scaler = st.session_state['scaler']
+            input_scaled = scaler.transform(input_df)
             
-            scaler.fit(X_encoded)
-            input_scaled = scaler.transform(input_encoded)
+            # Select best model (highest ROC-AUC)
+            results = st.session_state['results']
+            best_model_name = max(results, key=lambda x: results[x]['roc_auc'])
+            best_model = results[best_model_name]['model']
             
             # Prediction
             prediction = best_model.predict(input_scaled)[0]
             probability = best_model.predict_proba(input_scaled)[0][1]
             
             st.divider()
+            st.subheader(f"Prediction using {best_model_name}")
+            
             if prediction == 1:
-                st.error(f"### Result: Customer will churn")
+                st.error(f"### Final prediction: Customer will churn")
+                st.write(f"**Churn Probability:** {probability:.1%}")
             else:
-                st.success(f"### Result: Customer will not churn")
-                
-            st.write(f"**Churn Probability:** {probability:.2%}")
-            st.progress(probability)
+                st.success(f"### Final prediction: Customer will not churn")
+                st.write(f"**Churn Probability:** {probability:.1%}")
